@@ -55,13 +55,17 @@ if (empty($route)) {
 $method = $_SERVER['REQUEST_METHOD'];
 $input = json_decode(file_get_contents('php://input'), true);
 
-// Helper for Get Client IP (Support proxies)
+// Helper for Get Client IP (Support multiple proxy headers)
 function getClientIP() {
-    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-        return trim($ips[0]);
+    $keys = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_CLIENT_IP', 'REMOTE_ADDR'];
+    foreach ($keys as $key) {
+        if (!empty($_SERVER[$key])) {
+            $ips = explode(',', $_SERVER[$key]);
+            $ip = trim($ips[0]);
+            if (!empty($ip)) return $ip;
+        }
     }
-    return $_SERVER['REMOTE_ADDR'] ?? '';
+    return '0.0.0.0';
 }
 
 $client_ip = getClientIP();
@@ -132,6 +136,9 @@ switch ($route) {
             $stmt = $pdo->prepare("SELECT id, username, role, is_blocked, muted_until FROM users WHERE id = ?");
             $stmt->execute([$new_user_id]);
             $user = $stmt->fetch();
+            
+            // Ensure is_blocked is 0 for new users
+            $user['is_blocked'] = 0; 
             $user['is_verified'] = (strtolower($user['username']) === 'dilshod') ? 1 : 0;
 
             respond(['success' => true, 'user' => $user, 'muted_until' => $mute_until]);

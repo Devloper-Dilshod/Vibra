@@ -317,11 +317,15 @@ export default function App() {
         if (!user) return;
         const endpoint = isBlocked ? 'unblock' : 'block';
         try {
-            await axios.post(`${API_BASE}/index.php?route=admin/${endpoint}`, { user_id: targetId, admin_id: user.id });
-            fetchUsers();
-            notify(isBlocked ? 'Foydalanuvchi blokdan chiqarildi' : 'Foydalanuvchi bloklandi');
+            const res = await axios.post(`${API_BASE}/index.php?route=admin/${endpoint}`, { user_id: targetId, admin_id: user.id });
+            if (res.data.success) {
+                fetchUsers();
+                notify(isBlocked ? 'Foydalanuvchi blokdan chiqarildi' : 'Foydalanuvchi bloklandi');
+            } else {
+                notify(res.data.error || 'Operatsiyada xatolik', 'error');
+            }
         } catch (err) {
-            notify('Operatsiyada xatolik', 'error');
+            notify('Server bilan bog\'lanishda xatolik', 'error');
         }
     };
 
@@ -533,13 +537,29 @@ export default function App() {
                     {userList.map(u => (
                         <div key={u.id} className="flex items-center justify-between p-6 bg-slate-50 rounded-[2rem] border border-slate-100 group transition-all">
                             <div className="flex items-center gap-4">
-                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${u.role === 'admin' ? 'bg-sky-100 text-sky-600' : 'bg-slate-200 text-slate-500 shadow-inner'}`}><UserIcon className="w-7 h-7" /></div>
-                                <div>
-                                    <p className="font-black text-slate-900 text-lg">{u.username}</p>
+                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${u.role === 'admin' ? 'bg-sky-100 text-sky-600' : 'bg-slate-200 text-slate-500 shadow-inner'}`}>
+                                    <UserIcon className="w-7 h-7" />
+                                </div>
+                                <div className="flex flex-col">
+                                    <div className="flex items-center gap-2">
+                                        <p className="font-black text-slate-900 text-lg">{u.username}</p>
+                                        {u.is_blocked ? (
+                                            <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[8px] font-black uppercase rounded-lg">Bloklangan</span>
+                                        ) : (
+                                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-600 text-[8px] font-black uppercase rounded-lg">Aktiv</span>
+                                        )}
+                                    </div>
                                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{u.role}</p>
                                 </div>
                             </div>
-                            {u.username !== user.username && <button onClick={() => toggleBlock(u.id, u.is_blocked)} className={`px-8 py-3 rounded-2xl text-xs font-black shadow-lg transition-all active:scale-90 ${u.is_blocked ? 'bg-emerald-500 text-white shadow-emerald-100' : 'bg-red-500 text-white shadow-red-100'}`}>{u.is_blocked ? 'Aktivlash' : 'Bloklash'}</button>}
+                            {u.username !== user.username && (
+                                <button
+                                    onClick={() => toggleBlock(u.id, u.is_blocked)}
+                                    className={`px-8 py-3 rounded-2xl text-[10px] font-black shadow-lg transition-all active:scale-90 ${u.is_blocked ? 'bg-emerald-500 text-white shadow-emerald-200' : 'bg-red-500 text-white shadow-red-200'}`}
+                                >
+                                    {u.is_blocked ? 'Blokdan ochish' : 'Bloklash'}
+                                </button>
+                            )}
                         </div>
                     ))}
                 </div>
