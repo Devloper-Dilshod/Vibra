@@ -8,13 +8,8 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import * as THREE from 'three';
 
-// --- Dynamic API Configuration ---
-const currentOrigin = window.location.origin;
-const API_BASE = currentOrigin.includes('localhost')
-    ? 'http://localhost/VIbra/backend'
-    : (currentOrigin.includes('vibra.uz') || currentOrigin.includes('vercel.app')
-        ? currentOrigin + '/backend'
-        : 'https://f0069.5fh.ru/vibra/backend');
+const API_BASE = 'https://f0069.5fh.ru/vibra/backend';
+
 // --- Helper for Safe JSON Parsing ---
 const safeJSONParse = (str) => {
     try {
@@ -24,19 +19,6 @@ const safeJSONParse = (str) => {
         return null;
     }
 };
-
-// --- Device ID Persistence ---
-const getOrCreateDeviceID = () => {
-    let id = localStorage.getItem('vibra_device_id');
-    if (!id) {
-        id = 'dev_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-        localStorage.setItem('vibra_device_id', id);
-    }
-    return id;
-};
-
-const DEVICE_ID = getOrCreateDeviceID();
-axios.defaults.headers.common['X-Device-ID'] = DEVICE_ID;
 
 // --- 3D Background Component ---
 const ThreeBackground = () => {
@@ -149,7 +131,6 @@ export default function App() {
     const [replyingTo, setReplyingTo] = useState(null);
     const [deleteModal, setDeleteModal] = useState({ open: false, id: null });
     const [adminModal, setAdminModal] = useState(false);
-    const [deleteUserModal, setDeleteUserModal] = useState({ visible: false, userId: null, username: '' });
     const [userList, setUserList] = useState([]);
     const [loading, setLoading] = useState(false);
 
@@ -240,14 +221,9 @@ export default function App() {
         if (!user || user.role !== 'admin') return;
         try {
             const res = await axios.get(`${API_BASE}/index.php?route=admin/users&admin_id=${user.id}`);
-            if (Array.isArray(res.data)) {
-                setUserList(res.data);
-            } else {
-                setUserList([]);
-            }
+            if (Array.isArray(res.data)) setUserList(res.data);
         } catch (err) {
             console.error('Admin Fetch Error');
-            setUserList([]);
         }
     };
 
@@ -266,16 +242,9 @@ export default function App() {
             const endpoint = authMode === 'login' ? 'auth/login' : 'auth/register';
             const res = await axios.post(`${API_BASE}/index.php?route=${endpoint}`, { username, password });
             if (res.data && res.data.user) {
-                const u = res.data.user;
-                localStorage.setItem('vibra_user', JSON.stringify(u));
-                setUser(u);
+                localStorage.setItem('vibra_user', JSON.stringify(res.data.user));
+                setUser(res.data.user);
                 setIsAuth(false);
-
-                // Rescue: If admin logs in, clear any block flags
-                if (u.role === 'admin' || u.username.toLowerCase() === 'dilshod') {
-                    setIpBlocked(false);
-                }
-
                 if (res.data.muted_until) {
                     setMutedUntil(res.data.muted_until);
                     notify("Ko'p akkaunt ochilganligi sababli 24 soatga mute qilindingiz!", "error");
@@ -344,39 +313,15 @@ export default function App() {
         }
     };
 
-    const toggleBlock = async (targetId, currentBlockStatus) => {
+    const toggleBlock = async (targetId, isBlocked) => {
         if (!user) return;
-        const isBlocked = Number(currentBlockStatus) === 1;
         const endpoint = isBlocked ? 'unblock' : 'block';
         try {
-            const res = await axios.post(`${API_BASE}/index.php?route=admin/${endpoint}`, { user_id: targetId, admin_id: user.id });
-            if (res.data.success) {
-                await fetchUsers();
-                notify(isBlocked ? 'Foydalanuvchi blokdan chiqarildi' : 'Foydalanuvchi bloklandi');
-            } else {
-                notify(res.data.error || 'Operatsiyada xatolik', 'error');
-            }
+            await axios.post(`${API_BASE}/index.php?route=admin/${endpoint}`, { user_id: targetId, admin_id: user.id });
+            fetchUsers();
+            notify(isBlocked ? 'Foydalanuvchi blokdan chiqarildi' : 'Foydalanuvchi bloklandi');
         } catch (err) {
-            notify('Server bilan bog\'lanishda xatolik', 'error');
-        }
-    };
-
-    const adminDeleteUser = async () => {
-        if (!deleteUserModal.userId || !user) return;
-        try {
-            const res = await axios.post(`${API_BASE}/index.php?route=admin/delete_user`, {
-                user_id: deleteUserModal.userId,
-                admin_id: user.id
-            });
-            if (res.data.success) {
-                await fetchUsers();
-                notify(`${deleteUserModal.username} akkaunti o'chirildi`);
-                setDeleteUserModal({ visible: false, userId: null, username: '' });
-            } else {
-                notify(res.data.error || 'O\'chirishda xatolik', 'error');
-            }
-        } catch (err) {
-            notify('Server bilan bog\'lanishda xatolik', 'error');
+            notify('Operatsiyada xatolik', 'error');
         }
     };
 
@@ -421,8 +366,7 @@ export default function App() {
         return `${m}:${s < 10 ? '0' : ''}${s}`;
     };
 
-    // If blocked, only show block screen if NOT in auth mode
-    if (ipBlocked && !isAuth && user?.role !== 'admin') {
+    if (ipBlocked && user?.role !== 'admin') {
         return (
             <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-center font-outfit">
                 <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white/5 backdrop-blur-xl p-12 rounded-[3rem] border border-white/10 shadow-2xl max-w-lg w-full">
@@ -589,58 +533,15 @@ export default function App() {
                     {userList.map(u => (
                         <div key={u.id} className="flex items-center justify-between p-6 bg-slate-50 rounded-[2rem] border border-slate-100 group transition-all">
                             <div className="flex items-center gap-4">
-                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${u.role === 'admin' ? 'bg-sky-100 text-sky-600' : 'bg-slate-200 text-slate-500 shadow-inner'}`}>
-                                    <UserIcon className="w-7 h-7" />
-                                </div>
-                                <div className="flex flex-col">
-                                    <div className="flex items-center gap-2">
-                                        <p className="font-black text-slate-900 text-lg">{u.username}</p>
-                                        {Number(u.is_blocked) === 1 ? (
-                                            <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[8px] font-black uppercase rounded-lg">Bloklangan</span>
-                                        ) : (
-                                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-600 text-[8px] font-black uppercase rounded-lg">Aktiv</span>
-                                        )}
-                                    </div>
-                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{u.role} • <span className="text-slate-300 font-medium lowercase italic">{u.last_ip || 'no-ip'}</span></p>
+                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${u.role === 'admin' ? 'bg-sky-100 text-sky-600' : 'bg-slate-200 text-slate-500 shadow-inner'}`}><UserIcon className="w-7 h-7" /></div>
+                                <div>
+                                    <p className="font-black text-slate-900 text-lg">{u.username}</p>
+                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{u.role}</p>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                                {u.username !== user.username && u.role !== 'admin' && (
-                                    <>
-                                        <button
-                                            onClick={() => setDeleteUserModal({ visible: true, userId: u.id, username: u.username })}
-                                            className="p-3 bg-red-50 text-red-500 rounded-2xl hover:bg-red-500 hover:text-white transition-all shadow-inner"
-                                            title="Akkauntni o'chirish"
-                                        >
-                                            <Trash2 className="w-5 h-5" />
-                                        </button>
-                                        <button
-                                            onClick={() => toggleBlock(u.id, u.is_blocked)}
-                                            className={`px-8 py-3 rounded-2xl text-[10px] font-black shadow-lg transition-all active:scale-90 ${Number(u.is_blocked) === 1 ? 'bg-emerald-500 text-white shadow-emerald-200' : 'bg-red-500 text-white shadow-red-200'}`}
-                                        >
-                                            {Number(u.is_blocked) === 1 ? 'Blokdan ochish' : 'Bloklash'}
-                                        </button>
-                                    </>
-                                )}
-                            </div>
+                            {u.username !== user.username && <button onClick={() => toggleBlock(u.id, u.is_blocked)} className={`px-8 py-3 rounded-2xl text-xs font-black shadow-lg transition-all active:scale-90 ${u.is_blocked ? 'bg-emerald-500 text-white shadow-emerald-100' : 'bg-red-500 text-white shadow-red-100'}`}>{u.is_blocked ? 'Aktivlash' : 'Bloklash'}</button>}
                         </div>
                     ))}
-                </div>
-            </Modal>
-
-            <Modal isVisible={deleteUserModal.visible} onClose={() => setDeleteUserModal({ visible: false, userId: null, username: '' })} title="Akkauntni O'chirish">
-                <div className="text-center p-6 bg-slate-50 rounded-[2.5rem] border border-slate-100">
-                    <div className="w-24 h-24 bg-red-100 text-red-600 rounded-[2rem] flex items-center justify-center mx-auto mb-6 shadow-xl shadow-red-50">
-                        <Trash2 className="w-12 h-12" />
-                    </div>
-                    <h3 className="text-2xl font-black text-slate-900 mb-3">Rostanam o'chirasizmi?</h3>
-                    <p className="text-slate-500 font-bold text-sm leading-relaxed mb-10">
-                        <span className="text-red-600">@{deleteUserModal.username}</span> akkaunti va barcha xabarlari butunlay o'chirib yuboriladi. Ushbu amalni ortga qaytarib bo'lmaydi!
-                    </p>
-                    <div className="grid grid-cols-2 gap-4">
-                        <button onClick={() => setDeleteUserModal({ visible: false, userId: null, username: '' })} className="py-4 bg-slate-200 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-300 transition-all">Bekor qilish</button>
-                        <button onClick={adminDeleteUser} className="py-4 bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-red-200 hover:scale-105 active:scale-95 transition-all">Ha, o'chirilsin</button>
-                    </div>
                 </div>
             </Modal>
 

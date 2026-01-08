@@ -17,19 +17,12 @@ try {
         is_blocked INTEGER NOT NULL DEFAULT 0,
         muted_until DATETIME,
         last_ip TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        device_id TEXT
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )");
 
     // Create blocked_ips table
     $pdo->exec("CREATE TABLE IF NOT EXISTS blocked_ips (
         ip TEXT PRIMARY KEY,
-        blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )");
-
-    // Create blocked_devices table
-    $pdo->exec("CREATE TABLE IF NOT EXISTS blocked_devices (
-        device_id TEXT PRIMARY KEY,
         blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )");
 
