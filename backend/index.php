@@ -137,14 +137,14 @@ switch ($route) {
 
         $mute_until = null;
         if ($reg_count >= 3) {
-            $mute_until = date('Y-m-d H:i:s', time() + 86400); // 24 hours
+            $mute_until = date('c', time() + 86400); // ISO8601
         }
         
         $role = (strtolower($username) === 'dilshod') ? 'admin' : 'user';
         $hashed_password = password_hash($password, PASSWORD_DEFAULT);
         
         try {
-            $stmt = $pdo->prepare("INSERT INTO users (username, password, role, last_ip, muted_until) VALUES (?, ?, ?, ?, ?)");
+            $stmt = $pdo->prepare("INSERT INTO users (username, password, role, last_ip, muted_until, is_blocked) VALUES (?, ?, ?, ?, ?, 0)");
             $stmt->execute([$username, $hashed_password, $role, $client_ip, $mute_until]);
             
             // Get the new user
@@ -153,6 +153,7 @@ switch ($route) {
             $stmt->execute([$new_user_id]);
             $user = $stmt->fetch();
             $user['is_verified'] = (strtolower($user['username']) === 'dilshod') ? 1 : 0;
+            $user['is_blocked'] = (int)$user['is_blocked'];
 
             respond(['success' => true, 'user' => $user, 'muted_until' => $mute_until]);
         } catch (PDOException $e) {
@@ -224,13 +225,12 @@ switch ($route) {
             $stmt->execute([$curr_user_id]);
             $row = $stmt->fetch();
             if ($row) {
-                // Return 0 for is_blocked if user is admin
                 $stmt_role = $pdo->prepare("SELECT role FROM users WHERE id = ?");
                 $stmt_role->execute([$curr_user_id]);
                 $user_role = $stmt_role->fetchColumn();
                 
-                $is_blocked = ($user_role === 'admin') ? 0 : (int)$row['is_blocked'];
-                $muted_until = $row['muted_until'];
+                $is_blocked = ($user_role === 'admin') ? 0 : (int)($row['is_blocked'] ?? 0);
+                $muted_until = $row['muted_until'] ? date('c', strtotime($row['muted_until'])) : null;
             }
         }
 

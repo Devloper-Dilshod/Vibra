@@ -175,7 +175,15 @@ export default function App() {
     useEffect(() => {
         let timer;
         if (mutedUntil) {
-            const remaining = Math.max(0, Math.floor((new Date(mutedUntil).getTime() - new Date().getTime()) / 1000));
+            const mutedDate = new Date(mutedUntil);
+            const remaining = Math.max(0, Math.floor((mutedDate.getTime() - new Date().getTime()) / 1000));
+
+            // Safety: If date parsing failed (NaN), don't set a huge negative or weird value
+            if (isNaN(remaining)) {
+                setTimeLeft(0);
+                return;
+            }
+
             setTimeLeft(remaining);
             if (remaining > 0) {
                 timer = setInterval(() => {
@@ -188,6 +196,8 @@ export default function App() {
                     });
                 }, 1000);
             }
+        } else {
+            setTimeLeft(0);
         }
         return () => clearInterval(timer);
     }, [mutedUntil]);
