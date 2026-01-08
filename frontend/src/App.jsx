@@ -132,6 +132,18 @@ export default function App() {
         }
     }, [messages, replyingTo]);
 
+    // Admin Immunity: Always unblock if role is admin
+    useEffect(() => {
+        if (user?.role === 'admin') {
+            if (ipBlocked) setIpBlocked(false);
+            if (user.is_blocked) {
+                const updatedUser = { ...user, is_blocked: 0 };
+                localStorage.setItem('vibra_user', JSON.stringify(updatedUser));
+                setUser(updatedUser);
+            }
+        }
+    }, [user, ipBlocked]);
+
     // Mute Countdown Logic
     useEffect(() => {
         let timer;
@@ -162,8 +174,10 @@ export default function App() {
                 setMessages(data.messages);
                 if (data.muted_until) setMutedUntil(data.muted_until);
 
-                const isNowBlocked = !!Number(data.is_blocked || 0);
+                // Admin is never blocked
+                const isNowBlocked = (user.role === 'admin') ? 0 : !!Number(data.is_blocked || 0);
                 const isCurrentlyBlocked = !!Number(user.is_blocked || 0);
+
                 if (isNowBlocked !== isCurrentlyBlocked) {
                     const updatedUser = { ...user, is_blocked: isNowBlocked ? 1 : 0 };
                     localStorage.setItem('vibra_user', JSON.stringify(updatedUser));
@@ -172,7 +186,7 @@ export default function App() {
             }
         } catch (err) {
             console.error('Fetch Error:', err);
-            if (err.response?.status === 403) setIpBlocked(true);
+            if (err.response?.status === 403 && user?.role !== 'admin') setIpBlocked(true);
         }
     };
 
@@ -229,7 +243,7 @@ export default function App() {
         } catch (err) {
             if (err.response?.status === 403 && err.response?.data?.muted_until) {
                 setMutedUntil(err.response.data.muted_until);
-            } else if (err.response?.status === 403) {
+            } else if (err.response?.status === 403 && user?.role !== 'admin') {
                 setIpBlocked(true);
             } else {
                 alert(err.response?.data?.error || 'Xabar yuborishda xatolik');
@@ -275,6 +289,18 @@ export default function App() {
         }
     };
 
+    const resetBlocks = async () => {
+        if (!user || user.role !== 'admin') return;
+        if (!confirm("Barcha bloklarni (IP va Account) BUTUNLAY o'chirib tashlaysizmi?")) return;
+        try {
+            await axios.post(`${API_BASE}/index.php?route=admin/reset_blocks`, { admin_id: user.id });
+            alert("Barcha bloklar tozalandi!");
+            fetchUsers();
+        } catch (err) {
+            alert("Xatolik!");
+        }
+    };
+
     const scrollToMessage = (id) => {
         const el = messageRefs.current[id];
         if (el) {
@@ -297,7 +323,7 @@ export default function App() {
         return `${m}:${s < 10 ? '0' : ''}${s}`;
     };
 
-    if (ipBlocked) {
+    if (ipBlocked && user?.role !== 'admin') {
         return (
             <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-center font-outfit">
                 <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white/5 backdrop-blur-xl p-12 rounded-[3rem] border border-white/10 shadow-2xl max-w-lg w-full">
@@ -450,7 +476,14 @@ export default function App() {
             </div>
 
             <Modal isOpen={deleteModal.open} onClose={() => setDeleteModal({ open: false, id: null })} title="O'chirish" footer={<><button onClick={() => setDeleteModal({ open: false, id: null })} className="px-8 py-3 font-black text-slate-400">Yo'q</button><button onClick={confirmDelete} className="px-10 py-3 bg-red-500 text-white font-black rounded-2xl shadow-2xl">O'chirish</button></>}>Ushbu xabarni butunlay o'chirib tashlaysizmi?</Modal>
-            <Modal isOpen={adminModal} onClose={() => setAdminModal(false)} title="Boshqaruv Paneli" footer={<button onClick={() => setAdminModal(false)} className="px-12 py-5 bg-slate-900 text-white font-black rounded-3xl shadow-2xl">Yopish</button>}>
+            <Modal isOpen={adminModal} onClose={() => setAdminModal(false)} title="Boshqaruv Paneli" footer={
+                <div className="flex w-full justify-between items-center px-4">
+                    <button onClick={resetBlocks} className="px-6 py-3 bg-red-100 text-red-600 font-black rounded-2xl hover:bg-red-200 transition-all flex items-center gap-2">
+                        <Trash2 className="w-4 h-4" /> Reset Blocks
+                    </button>
+                    <button onClick={() => setAdminModal(false)} className="px-12 py-5 bg-slate-900 text-white font-black rounded-3xl shadow-2xl">Yopish</button>
+                </div>
+            }>
                 <div className="space-y-5 max-h-[500px] overflow-y-auto pr-3 custom-scrollbar">
                     {userList.map(u => (
                         <div key={u.id} className="flex items-center justify-between p-6 bg-slate-50 rounded-[2rem] border border-slate-100 group transition-all">
