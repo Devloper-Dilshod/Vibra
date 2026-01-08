@@ -149,15 +149,20 @@ export default function App() {
 
     useEffect(() => {
         if (user && user.id && !ipBlocked) {
-            fetchMessages();
-            const interval = setInterval(fetchMessages, 3000);
+            fetchMessages(true);
+            const interval = setInterval(() => fetchMessages(false), 3000);
             return () => clearInterval(interval);
         }
     }, [user, ipBlocked]);
 
     useEffect(() => {
         if (scrollRef.current && !replyingTo) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            const el = scrollRef.current;
+            // Scroll to bottom only if user is already near bottom (within 150px)
+            const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
+            if (isNearBottom) {
+                el.scrollTop = el.scrollHeight;
+            }
         }
     }, [messages, replyingTo]);
 
@@ -226,7 +231,7 @@ export default function App() {
         return () => clearInterval(timer);
     }, [mutedUntil]);
 
-    const fetchMessages = async () => {
+    const fetchMessages = async (isFirstLoad = false) => {
         if (!user || !user.id || ipBlocked || !token) return;
         try {
             const res = await axios.get(`${API_BASE}/index.php?route=chat/messages&user_id=${user.id}`, {
@@ -236,6 +241,12 @@ export default function App() {
             if (data && Array.isArray(data.messages)) {
                 setMessages(data.messages);
                 if (data.muted_until) setMutedUntil(data.muted_until);
+
+                if (isFirstLoad && scrollRef.current) {
+                    setTimeout(() => {
+                        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                    }, 100);
+                }
 
                 // Admin is never blocked
                 const isNowBlocked = (user.role === 'admin') ? 0 : !!Number(data.is_blocked || 0);
@@ -316,7 +327,7 @@ export default function App() {
             );
             setInput('');
             setReplyingTo(null);
-            fetchMessages();
+            await fetchMessages(true); // Force scroll on send
         } catch (err) {
             if (err.response?.status === 401) logout();
             else if (err.response?.status === 403 && err.response?.data?.muted_until) {
@@ -498,9 +509,9 @@ export default function App() {
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.5, y: 20 }}
                             onClick={scrollToTop}
-                            className="absolute bottom-40 right-10 p-4 bg-sky-500 text-white rounded-2xl shadow-2xl z-40 hover:bg-sky-400 active:scale-90 transition-all"
+                            className="absolute bottom-52 right-8 md:right-12 p-6 bg-sky-500 text-white rounded-full shadow-[0_20px_60px_rgba(14,165,233,0.4)] z-[70] hover:bg-sky-400 active:scale-95 transition-all border-4 border-white group"
                         >
-                            <ArrowUp className="w-6 h-6" />
+                            <ArrowUp className="w-8 h-8 group-hover:-translate-y-1 transition-transform" />
                         </motion.button>
                     )}
                 </AnimatePresence>
