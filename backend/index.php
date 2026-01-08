@@ -79,8 +79,7 @@ if ($device_id !== 'no-device-id') {
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM blocked_devices WHERE device_id = ?");
     $stmt->execute([$device_id]);
     if ($stmt->fetchColumn() > 0) {
-        // Skip block if it's an admin bypass check (if possible)
-        $user_id_param = $_GET['user_id'] ?? $input['user_id'] ?? null;
+        $user_id_param = $_GET['user_id'] ?? $input['user_id'] ?? $_GET['admin_id'] ?? $input['admin_id'] ?? null;
         $is_admin = false;
         if ($user_id_param) {
             $stmt_a = $pdo->prepare("SELECT role FROM users WHERE id = ?");
@@ -94,32 +93,8 @@ if ($device_id !== 'no-device-id') {
     }
 }
 
-if (!$is_auth_route && $client_ip !== 'unknown' && !empty($client_ip) && $client_ip !== '::1' && $client_ip !== '127.0.0.1') {
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM blocked_ips WHERE ip = ?");
-    $stmt->execute([$client_ip]);
-    if ($stmt->fetchColumn() > 0) {
-        // Double Check: Is this a shared IP? (Ignore block if more than 10 users share it)
-        $stmt_s = $pdo->prepare("SELECT COUNT(*) FROM users WHERE last_ip = ?");
-        $stmt_s->execute([$client_ip]);
-        $shared_count = $stmt_s->fetchColumn();
-
-        if ($shared_count <= 10) {
-            $user_id_param = $_GET['user_id'] ?? $input['user_id'] ?? null;
-            $is_admin = false;
-            if ($user_id_param) {
-                $stmt_a = $pdo->prepare("SELECT role FROM users WHERE id = ?");
-                $stmt_a->execute([$user_id_param]);
-                if ($stmt_a->fetchColumn() === 'admin') $is_admin = true;
-            }
-            
-            if (!$is_admin) {
-                http_response_code(403);
-                echo json_encode(['error' => 'Siz bloklangansiz']);
-                exit;
-            }
-        }
-    }
-}
+// IP BASED BLOCKING REMOVED FROM GLOBAL CHECK TO PREVENT WI-FI ISSUES
+// We will rely on Device ID and is_blocked account status.
 
 function respond($data, $status = 200) {
     http_response_code($status);
@@ -426,7 +401,6 @@ try {
             $stmt = $pdo->prepare("DELETE FROM blocked_ips WHERE ip = ?");
             $stmt->execute([$ip_to_unblock]);
         }
-
         respond(['success' => true]);
         break;
 
@@ -439,6 +413,7 @@ try {
         if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
         
         $pdo->exec("DELETE FROM blocked_ips");
+        $pdo->exec("DELETE FROM blocked_devices");
         $pdo->exec("UPDATE users SET is_blocked = 0");
         respond(['success' => true]);
         break;
