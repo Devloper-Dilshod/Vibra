@@ -141,6 +141,8 @@ export default function App() {
     const scrollRef = useRef(null);
     const messageRefs = useRef({});
     const isAtBottomRef = useRef(true);
+    const isFirstLoadRef = useRef(true);
+    const forceScrollRef = useRef(false);
 
     const notify = (message, type = 'success') => {
         setToast({ message, type, visible: true });
@@ -149,16 +151,25 @@ export default function App() {
 
     useEffect(() => {
         if (user && user.id && !ipBlocked) {
-            fetchMessages(true);
-            const interval = setInterval(() => fetchMessages(false), 3000);
+            fetchMessages();
+            const interval = setInterval(fetchMessages, 3000);
             return () => clearInterval(interval);
         }
     }, [user, ipBlocked]);
 
     useEffect(() => {
-        // Auto-scroll ONLY if already at bottom
-        if (scrollRef.current && isAtBottomRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        if (!scrollRef.current) return;
+        const el = scrollRef.current;
+
+        // Condition 1: First time we ever get messages
+        // Condition 2: The user just sent a message
+        // Condition 3: The user was already at the bottom
+        if (isFirstLoadRef.current || forceScrollRef.current || isAtBottomRef.current) {
+            el.scrollTop = el.scrollHeight;
+
+            // Reset flags
+            isFirstLoadRef.current = false;
+            forceScrollRef.current = false;
         }
     }, [messages]);
 
@@ -167,12 +178,17 @@ export default function App() {
         const handleScroll = () => {
             if (scrollRef.current) {
                 const el = scrollRef.current;
-                const isBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+                // Use a larger buffer (100px) to consider 'at bottom'
+                const isBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
                 isAtBottomRef.current = isBottom;
             }
         };
         const el = scrollRef.current;
-        if (el) el.addEventListener('scroll', handleScroll);
+        if (el) {
+            el.addEventListener('scroll', handleScroll, { passive: true });
+            // Initial check
+            handleScroll();
+        }
         return () => el?.removeEventListener('scroll', handleScroll);
     }, []);
 
@@ -221,7 +237,7 @@ export default function App() {
         return () => clearInterval(timer);
     }, [mutedUntil]);
 
-    const fetchMessages = async (isFirstLoad = false) => {
+    const fetchMessages = async () => {
         if (!user || !user.id || ipBlocked || !token) return;
         try {
             const res = await axios.get(`${API_BASE}/index.php?route=chat/messages&user_id=${user.id}`, {
@@ -231,12 +247,6 @@ export default function App() {
             if (data && Array.isArray(data.messages)) {
                 setMessages(data.messages);
                 if (data.muted_until) setMutedUntil(data.muted_until);
-
-                if (isFirstLoad && scrollRef.current) {
-                    setTimeout(() => {
-                        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-                    }, 100);
-                }
 
                 // Admin is never blocked
                 const isNowBlocked = (user.role === 'admin') ? 0 : !!Number(data.is_blocked || 0);
@@ -317,7 +327,8 @@ export default function App() {
             );
             setInput('');
             setReplyingTo(null);
-            await fetchMessages(true); // Force scroll on send
+            forceScrollRef.current = true; // Signal that the user sent a message
+            await fetchMessages();
         } catch (err) {
             if (err.response?.status === 401) logout();
             else if (err.response?.status === 403 && err.response?.data?.muted_until) {
