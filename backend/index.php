@@ -55,8 +55,16 @@ if (empty($route)) {
 $method = $_SERVER['REQUEST_METHOD'];
 $input = json_decode(file_get_contents('php://input'), true);
 
-// Global IP Check & Block (Skip for login and info routes to allow admin recovery)
-$client_ip = $_SERVER['REMOTE_ADDR'] ?? '';
+// Helper for Get Client IP (Support proxies)
+function getClientIP() {
+    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
+        return trim($ips[0]);
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? '';
+}
+
+$client_ip = getClientIP();
 $is_auth_route = strpos($route, 'auth/') !== false;
 
 if (!$is_auth_route && !empty($client_ip) && $client_ip !== '::1' && $client_ip !== '127.0.0.1') {
@@ -92,26 +100,41 @@ switch ($route) {
         $username = trim($input['username'] ?? '');
         $password = $input['password'] ?? '';
         if (!$username || !$password) respond(['error' => 'Missing fields'], 400);
-        
+
         if (!preg_match('/^[a-zA-Z0-9_]+$/', $username)) {
             respond(['error' => "Username faqat harf, raqam va '_' dan iborat bo'lishi kerak"], 400);
+        }
+
+        // Reserve 'dilshod'
+        if (strtolower($username) !== 'dilshod' && strpos(strtolower($username), 'dilshod') !== false) {
+            respond(['error' => "Ushbu username taqiqlangan!"], 400);
+        }
+
+        // Rate Limit: 3 accounts per hour from same IP
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE last_ip = ? AND created_at > datetime('now', '-1 hour')");
+        $stmt->execute([$client_ip]);
+        $reg_count = $stmt->fetchColumn();
+
+        $mute_until = null;
+        if ($reg_count >= 3) {
+            $mute_until = date('Y-m-d H:i:s', time() + 86400); // 24 hours
         }
         
         $role = (strtolower($username) === 'dilshod') ? 'admin' : 'user';
         $hashed_password = password_hash($password, PASSWORD_DEFAULT);
         
         try {
-            $stmt = $pdo->prepare("INSERT INTO users (username, password, role, last_ip) VALUES (?, ?, ?, ?)");
-            $stmt->execute([$username, $hashed_password, $role, $client_ip]);
+            $stmt = $pdo->prepare("INSERT INTO users (username, password, role, last_ip, muted_until) VALUES (?, ?, ?, ?, ?)");
+            $stmt->execute([$username, $hashed_password, $role, $client_ip, $mute_until]);
             
             // Get the new user
             $new_user_id = $pdo->lastInsertId();
-            $stmt = $pdo->prepare("SELECT id, username, role, is_blocked FROM users WHERE id = ?");
+            $stmt = $pdo->prepare("SELECT id, username, role, is_blocked, muted_until FROM users WHERE id = ?");
             $stmt->execute([$new_user_id]);
             $user = $stmt->fetch();
             $user['is_verified'] = (strtolower($user['username']) === 'dilshod') ? 1 : 0;
 
-            respond(['success' => true, 'user' => $user]);
+            respond(['success' => true, 'user' => $user, 'muted_until' => $mute_until]);
         } catch (PDOException $e) {
             respond(['error' => 'Bu foydalanuvchi nomi band'], 400);
         }
@@ -327,8 +350,21 @@ switch ($route) {
         $stmt->execute([$admin_id]);
         if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
 
+        // Get user IP before unblocking
+        $stmt = $pdo->prepare("SELECT last_ip FROM users WHERE id = ?");
+        $stmt->execute([$target_user_id]);
+        $ip_to_unblock = $stmt->fetchColumn();
+
+        // Unblock User
         $stmt = $pdo->prepare("UPDATE users SET is_blocked = 0 WHERE id = ?");
         $stmt->execute([$target_user_id]);
+
+        // Remove IP from blocked list
+        if ($ip_to_unblock) {
+            $stmt = $pdo->prepare("DELETE FROM blocked_ips WHERE ip = ?");
+            $stmt->execute([$ip_to_unblock]);
+        }
+
         respond(['success' => true]);
         break;
 

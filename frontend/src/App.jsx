@@ -94,6 +94,25 @@ const Modal = ({ isOpen, onClose, title, children, footer }) => (
     </AnimatePresence>
 );
 
+// --- Toast Notification Component ---
+const Toast = ({ message, type, isVisible, onHide }) => (
+    <AnimatePresence>
+        {isVisible && (
+            <motion.div
+                initial={{ y: 50, opacity: 0, scale: 0.8 }}
+                animate={{ y: 0, opacity: 1, scale: 1 }}
+                exit={{ y: 20, opacity: 0, scale: 0.8 }}
+                className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[200] px-8 py-4 bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl flex items-center gap-3 pointer-events-none"
+            >
+                <div className={`p-1.5 rounded-lg ${type === 'error' ? 'bg-red-500/20 text-red-500' : 'bg-emerald-500/20 text-emerald-500'}`}>
+                    {type === 'error' ? <AlertCircle className="w-5 h-5" /> : <CheckCheck className="w-5 h-5" />}
+                </div>
+                <p className="text-white font-black text-sm tracking-tight">{message}</p>
+            </motion.div>
+        )}
+    </AnimatePresence>
+);
+
 export default function App() {
     const [user, setUser] = useState(() => safeJSONParse(localStorage.getItem('vibra_user') || 'null'));
     const [messages, setMessages] = useState([]);
@@ -115,8 +134,16 @@ export default function App() {
     const [userList, setUserList] = useState([]);
     const [loading, setLoading] = useState(false);
 
+    // Notification State
+    const [toast, setToast] = useState({ message: '', type: 'success', visible: false });
+
     const scrollRef = useRef(null);
     const messageRefs = useRef({});
+
+    const notify = (message, type = 'success') => {
+        setToast({ message, type, visible: true });
+        setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+    };
 
     useEffect(() => {
         if (user && user.id && !ipBlocked) {
@@ -218,6 +245,12 @@ export default function App() {
                 localStorage.setItem('vibra_user', JSON.stringify(res.data.user));
                 setUser(res.data.user);
                 setIsAuth(false);
+                if (res.data.muted_until) {
+                    setMutedUntil(res.data.muted_until);
+                    notify("Ko'p akkaunt ochilganligi sababli 24 soatga mute qilindingiz!", "error");
+                } else {
+                    notify(authMode === 'login' ? 'Xush kelibsiz!' : 'Muvaffaqiyatli ro\'yxatdan o\'tdingiz!');
+                }
             } else {
                 setError('Ma\'lumot olishda xatolik');
             }
@@ -246,7 +279,7 @@ export default function App() {
             } else if (err.response?.status === 403 && user?.role !== 'admin') {
                 setIpBlocked(true);
             } else {
-                alert(err.response?.data?.error || 'Xabar yuborishda xatolik');
+                notify(err.response?.data?.error || 'Xabar yuborishda xatolik', 'error');
             }
         }
     };
@@ -262,8 +295,9 @@ export default function App() {
             await axios.post(`${API_BASE}/index.php?route=chat/edit`, { id: editingMsg.id, user_id: user.id, message: editInput });
             setEditingMsg(null);
             fetchMessages();
+            notify('Xabar tahrirlandi');
         } catch (err) {
-            alert('Tahrirlashda xatolik');
+            notify('Tahrirlashda xatolik', 'error');
         }
     };
 
@@ -273,8 +307,9 @@ export default function App() {
             await axios.post(`${API_BASE}/index.php?route=chat/delete`, { id: deleteModal.id, user_id: user.id });
             setDeleteModal({ open: false, id: null });
             fetchMessages();
+            notify('Xabar o\'chirildi');
         } catch (err) {
-            alert('O\'chirishda xatolik');
+            notify('O\'chirishda xatolik', 'error');
         }
     };
 
@@ -284,8 +319,9 @@ export default function App() {
         try {
             await axios.post(`${API_BASE}/index.php?route=admin/${endpoint}`, { user_id: targetId, admin_id: user.id });
             fetchUsers();
+            notify(isBlocked ? 'Foydalanuvchi blokdan chiqarildi' : 'Foydalanuvchi bloklandi');
         } catch (err) {
-            alert('Operatsiyada xatolik');
+            notify('Operatsiyada xatolik', 'error');
         }
     };
 
@@ -294,10 +330,10 @@ export default function App() {
         if (!confirm("Barcha bloklarni (IP va Account) BUTUNLAY o'chirib tashlaysizmi?")) return;
         try {
             await axios.post(`${API_BASE}/index.php?route=admin/reset_blocks`, { admin_id: user.id });
-            alert("Barcha bloklar tozalandi!");
+            notify("Barcha bloklar tozalandi!");
             fetchUsers();
         } catch (err) {
-            alert("Xatolik!");
+            notify("Reset qilishda xatolik", "error");
         }
     };
 
@@ -315,9 +351,16 @@ export default function App() {
         setUser(null);
         setIsAuth(true);
         setMessages([]);
+        notify('Tizimdan chiqdingiz');
     };
 
     const formatMuteTime = (sec) => {
+        if (sec >= 3600) {
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            const s = sec % 60;
+            return `${h}s ${m}:${s < 10 ? '0' : ''}${s}`;
+        }
         const m = Math.floor(sec / 60);
         const s = sec % 60;
         return `${m}:${s < 10 ? '0' : ''}${s}`;
@@ -360,6 +403,7 @@ export default function App() {
                         {authMode === 'login' ? "Akkaunt ochish" : "Kirishga o'tish"}
                     </button>
                 </motion.div>
+                <Toast isVisible={toast.visible} message={toast.message} type={toast.type} onHide={() => setToast(p => ({ ...p, visible: false }))} />
             </div>
         );
     }
@@ -476,6 +520,7 @@ export default function App() {
             </div>
 
             <Modal isOpen={deleteModal.open} onClose={() => setDeleteModal({ open: false, id: null })} title="O'chirish" footer={<><button onClick={() => setDeleteModal({ open: false, id: null })} className="px-8 py-3 font-black text-slate-400">Yo'q</button><button onClick={confirmDelete} className="px-10 py-3 bg-red-500 text-white font-black rounded-2xl shadow-2xl">O'chirish</button></>}>Ushbu xabarni butunlay o'chirib tashlaysizmi?</Modal>
+
             <Modal isOpen={adminModal} onClose={() => setAdminModal(false)} title="Boshqaruv Paneli" footer={
                 <div className="flex w-full justify-between items-center px-4">
                     <button onClick={resetBlocks} className="px-6 py-3 bg-red-100 text-red-600 font-black rounded-2xl hover:bg-red-200 transition-all flex items-center gap-2">
@@ -499,6 +544,9 @@ export default function App() {
                     ))}
                 </div>
             </Modal>
+
+            <Toast isVisible={toast.visible} message={toast.message} type={toast.type} onHide={() => setToast(p => ({ ...p, visible: false }))} />
+
             <style>{`.custom-scrollbar::-webkit-scrollbar { width: 5px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 20px; }`}</style>
         </div>
     );

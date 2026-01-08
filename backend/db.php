@@ -16,7 +16,8 @@ try {
         role TEXT NOT NULL DEFAULT 'user',
         is_blocked INTEGER NOT NULL DEFAULT 0,
         muted_until DATETIME,
-        last_ip TEXT
+        last_ip TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )");
 
     // Create blocked_ips table
