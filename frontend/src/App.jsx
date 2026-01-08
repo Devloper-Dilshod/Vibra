@@ -8,7 +8,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import * as THREE from 'three';
 
-const API_BASE = 'http://localhost/VIbra/backend/index.php';
+const API_BASE = 'https://f0069.5fh.ru/vibra/backend/index.php';
 
 // --- Helper for Safe JSON Parsing ---
 const safeJSONParse = (str) => {
