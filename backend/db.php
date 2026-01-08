@@ -22,8 +22,18 @@ try {
 
     // Create blocked_ips table
     $pdo->exec("CREATE TABLE IF NOT EXISTS blocked_ips (
-        ip TEXT PRIMARY KEY,
-        blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip TEXT UNIQUE NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    // Create login_attempts table
+    $pdo->exec("CREATE TABLE IF NOT EXISTS login_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip TEXT NOT NULL,
+        username TEXT,
+        attempted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        is_success INTEGER DEFAULT 0
     )");
 
     // Create messages table

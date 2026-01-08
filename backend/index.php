@@ -163,14 +163,27 @@ switch ($route) {
 
     case 'auth/login':
         if ($method !== 'POST') respond(['error' => 'Method not allowed'], 405);
-        $username = $input['username'] ?? '';
+        $username = trim($input['username'] ?? '');
         $password = $input['password'] ?? '';
         
+        // Brute force protection: Max 5 failures in last 15 mins per IP
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM login_attempts WHERE ip = ? AND is_success = 0 AND attempted_at > datetime('now', '-15 minutes')");
+        $stmt->execute([$client_ip]);
+        $failures = $stmt->fetchColumn();
+        
+        if ($failures >= 5) {
+            respond(['error' => 'Haddan tashqari ko\'p xato urinishlar. 15 daqiqa kuting.'], 429);
+        }
+
         $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ?");
         $stmt->execute([$username]);
         $user = $stmt->fetch();
         
         if ($user && password_verify($password, $user['password'])) {
+            // Success
+            $stmt = $pdo->prepare("INSERT INTO login_attempts (ip, username, is_success) VALUES (?, ?, 1)");
+            $stmt->execute([$client_ip, $username]);
+
             // Admins are immune to account blocking
             if ($user['is_blocked'] && $user['role'] !== 'admin') respond(['error' => 'Your account is blocked'], 403);
             
@@ -185,7 +198,11 @@ switch ($route) {
             
             respond(['user' => $user]);
         } else {
-            respond(['error' => 'Invalid credentials'], 401);
+            // Failure
+            $stmt = $pdo->prepare("INSERT INTO login_attempts (ip, username, is_success) VALUES (?, ?, 0)");
+            $stmt->execute([$client_ip, $username]);
+            
+            respond(['error' => 'Username yoki parol xato'], 401);
         }
         break;
 
