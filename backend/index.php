@@ -62,19 +62,24 @@ function getClientIP() {
         if (!empty($_SERVER[$key])) {
             $ips = explode(',', $_SERVER[$key]);
             $ip = trim($ips[0]);
-            if (!empty($ip)) return $ip;
-        }
-    }
-    return '0.0.0.0';
+    return 'unknown';
+}
+
+// Helper for Get Device ID from Header
+function getDeviceID() {
+    return $_SERVER['HTTP_X_DEVICE_ID'] ?? 'no-device-id';
 }
 
 $client_ip = getClientIP();
+$device_id = getDeviceID();
 $is_auth_route = strpos($route, 'auth/') !== false;
 
-if (!$is_auth_route && !empty($client_ip) && $client_ip !== '::1' && $client_ip !== '127.0.0.1') {
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM blocked_ips WHERE ip = ?");
-    $stmt->execute([$client_ip]);
+// 1. Global Device Block Check
+if ($device_id !== 'no-device-id') {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM blocked_devices WHERE device_id = ?");
+    $stmt->execute([$device_id]);
     if ($stmt->fetchColumn() > 0) {
+        // Skip block if it's an admin bypass check (if possible)
         $user_id_param = $_GET['user_id'] ?? $input['user_id'] ?? null;
         $is_admin = false;
         if ($user_id_param) {
@@ -82,11 +87,36 @@ if (!$is_auth_route && !empty($client_ip) && $client_ip !== '::1' && $client_ip 
             $stmt_a->execute([$user_id_param]);
             if ($stmt_a->fetchColumn() === 'admin') $is_admin = true;
         }
-        
+
         if (!$is_admin) {
-            http_response_code(403);
-            echo json_encode(['error' => 'Siz bloklangansiz']);
-            exit;
+            respond(['error' => 'Sizning qurilmangiz bloklangan'], 403);
+        }
+    }
+}
+
+if (!$is_auth_route && $client_ip !== 'unknown' && !empty($client_ip) && $client_ip !== '::1' && $client_ip !== '127.0.0.1') {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM blocked_ips WHERE ip = ?");
+    $stmt->execute([$client_ip]);
+    if ($stmt->fetchColumn() > 0) {
+        // Double Check: Is this a shared IP? (Ignore block if more than 10 users share it)
+        $stmt_s = $pdo->prepare("SELECT COUNT(*) FROM users WHERE last_ip = ?");
+        $stmt_s->execute([$client_ip]);
+        $shared_count = $stmt_s->fetchColumn();
+
+        if ($shared_count <= 10) {
+            $user_id_param = $_GET['user_id'] ?? $input['user_id'] ?? null;
+            $is_admin = false;
+            if ($user_id_param) {
+                $stmt_a = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+                $stmt_a->execute([$user_id_param]);
+                if ($stmt_a->fetchColumn() === 'admin') $is_admin = true;
+            }
+            
+            if (!$is_admin) {
+                http_response_code(403);
+                echo json_encode(['error' => 'Siz bloklangansiz']);
+                exit;
+            }
         }
     }
 }
@@ -98,8 +128,13 @@ function respond($data, $status = 200) {
 }
 
 // ROUTING LOGIC
-switch ($route) {
-    case 'auth/register':
+try {
+    switch ($route) {
+        case 'ping':
+            respond(['pong' => true, 'ip' => $client_ip, 'date' => date('Y-m-d H:i:s')]);
+            break;
+
+        case 'auth/register':
         if ($method !== 'POST') respond(['error' => 'Method not allowed'], 405);
         $username = trim($input['username'] ?? '');
         $password = $input['password'] ?? '';
@@ -128,12 +163,12 @@ switch ($route) {
         $hashed_password = password_hash($password, PASSWORD_DEFAULT);
         
         try {
-            $stmt = $pdo->prepare("INSERT INTO users (username, password, role, last_ip, muted_until) VALUES (?, ?, ?, ?, ?)");
-            $stmt->execute([$username, $hashed_password, $role, $client_ip, $mute_until]);
+            $stmt = $pdo->prepare("INSERT INTO users (username, password, role, last_ip, muted_until, device_id) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$username, $hashed_password, $role, $client_ip, $mute_until, $device_id]);
             
             // Get the new user
             $new_user_id = $pdo->lastInsertId();
-            $stmt = $pdo->prepare("SELECT id, username, role, is_blocked, muted_until FROM users WHERE id = ?");
+            $stmt = $pdo->prepare("SELECT id, username, role, is_blocked, muted_until, device_id FROM users WHERE id = ?");
             $stmt->execute([$new_user_id]);
             $user = $stmt->fetch();
             
@@ -157,19 +192,17 @@ switch ($route) {
         $user = $stmt->fetch();
         
         if ($user && password_verify($password, $user['password'])) {
-            // Admins are immune to account blocking
-            if ($user['is_blocked'] && $user['role'] !== 'admin') respond(['error' => 'Your account is blocked'], 403);
-            
-            // Update last IP on login
-            $stmt = $pdo->prepare("UPDATE users SET last_ip = ? WHERE id = ?");
-            $stmt->execute([$client_ip, $user['id']]);
+            // Update last IP and Device ID
+            $stmt = $pdo->prepare("UPDATE users SET last_ip = ?, device_id = ? WHERE id = ?");
+            $stmt->execute([$client_ip, $device_id, $user['id']]);
 
             unset($user['password']);
-            
-            // Add verified status
             $user['is_verified'] = (strtolower($user['username']) === 'dilshod') ? 1 : 0;
             
-            respond(['user' => $user]);
+            // Admin is never blocked
+            if ($user['role'] === 'admin') $user['is_blocked'] = 0;
+            
+            respond(['success' => true, 'user' => $user, 'muted_until' => $user['muted_until']]);
         } else {
             respond(['error' => 'Invalid credentials'], 401);
         }
@@ -333,15 +366,29 @@ switch ($route) {
         if ((int)$target_user_id === (int)$admin_id) respond(['error' => 'O\'zingizni bloklay olmaysiz!'], 400);
 
         $ip_to_block = $target_user['last_ip'];
+        $device_to_block = $target_user['device_id'];
 
         // Block User
         $stmt = $pdo->prepare("UPDATE users SET is_blocked = 1 WHERE id = ?");
         $stmt->execute([$target_user_id]);
 
-        // Add IP to blocked list (Safety: don't block empty or local IPs)
-        if ($ip_to_block && !in_array($ip_to_block, ['', '::1', '127.0.0.1'])) {
-            $stmt = $pdo->prepare("INSERT OR IGNORE INTO blocked_ips (ip) VALUES (?)");
+        // Add Device to blocked list (Precision Block)
+        if ($device_to_block && $device_to_block !== 'no-device-id') {
+            $stmt = $pdo->prepare("INSERT OR IGNORE INTO blocked_devices (device_id) VALUES (?)");
+            $stmt->execute([$device_to_block]);
+        }
+
+        // Add IP to blocked list (Shared IP Protection)
+        if ($ip_to_block && !in_array($ip_to_block, ['', '::1', '127.0.0.1', 'unknown', '0.0.0.0'])) {
+            // Check if this is a shared IP (e.g. more than 5 users)
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE last_ip = ?");
             $stmt->execute([$ip_to_block]);
+            $ip_user_count = $stmt->fetchColumn();
+
+            if ($ip_user_count <= 5) {
+                $stmt = $pdo->prepare("INSERT OR IGNORE INTO blocked_ips (ip) VALUES (?)");
+                $stmt->execute([$ip_to_block]);
+            }
         }
 
         respond(['success' => true]);
@@ -357,14 +404,22 @@ switch ($route) {
         $stmt->execute([$admin_id]);
         if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
 
-        // Get user IP before unblocking
-        $stmt = $pdo->prepare("SELECT last_ip FROM users WHERE id = ?");
+        // Get user IP and Device before unblocking
+        $stmt = $pdo->prepare("SELECT last_ip, device_id FROM users WHERE id = ?");
         $stmt->execute([$target_user_id]);
-        $ip_to_unblock = $stmt->fetchColumn();
+        $row = $stmt->fetch();
+        $ip_to_unblock = $row['last_ip'] ?? null;
+        $device_to_unblock = $row['device_id'] ?? null;
 
         // Unblock User
         $stmt = $pdo->prepare("UPDATE users SET is_blocked = 0 WHERE id = ?");
         $stmt->execute([$target_user_id]);
+
+        // Remove Device from blocked list
+        if ($device_to_unblock) {
+            $stmt = $pdo->prepare("DELETE FROM blocked_devices WHERE device_id = ?");
+            $stmt->execute([$device_to_unblock]);
+        }
 
         // Remove IP from blocked list
         if ($ip_to_unblock) {
@@ -397,7 +452,7 @@ switch ($route) {
         $stmt->execute([$admin_id]);
         if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
 
-        $stmt = $pdo->query("SELECT id, username, role, is_blocked FROM users");
+        $stmt = $pdo->query("SELECT id, username, role, is_blocked, last_ip, device_id FROM users ORDER BY id DESC");
         $all_users = $stmt->fetchAll();
         foreach ($all_users as &$u) {
             if ($u['role'] === 'admin') $u['is_blocked'] = 0;
@@ -406,8 +461,33 @@ switch ($route) {
         respond($all_users);
         break;
 
-    default:
-        respond(['error' => 'Endpoint not found: ' . $route], 404);
-        break;
+        case 'admin/delete_user':
+            if ($method !== 'POST') respond(['error' => 'Method not allowed'], 405);
+            $target_user_id = $input['user_id'] ?? null;
+            $admin_id = $input['admin_id'] ?? null;
+
+            // Verify admin
+            $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+            $stmt->execute([$admin_id]);
+            if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
+
+            // Admin can't be deleted via this endpoint (safety)
+            $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+            $stmt->execute([$target_user_id]);
+            if ($stmt->fetchColumn() === 'admin') respond(['error' => 'Adminni o\'chirib bo\'lmaydi'], 400);
+
+            // Delete User (Messages will cascade delete due to FK)
+            $stmt = $pdo->prepare("DELETE FROM users WHERE id = ?");
+            $stmt->execute([$target_user_id]);
+
+            respond(['success' => true]);
+            break;
+
+        default:
+            respond(['error' => 'Endpoint not found: ' . $route], 404);
+            break;
+    }
+} catch (Exception $e) {
+    respond(['error' => 'System Error: ' . $e->getMessage()], 500);
 }
 ?>
