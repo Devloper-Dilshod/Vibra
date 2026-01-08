@@ -27,79 +27,102 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit(0);
 }
 
-require_once __DIR__ . '/db.php';
+// 1. Database Initialization (Self-Healing)
+$db_file = __DIR__ . '/vibra.sqlite';
+try {
+    $pdo = new PDO("sqlite:$db_file");
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
-// 1. Try to get route from GET parameter (more robust for varied hosting)
+    // Initial Schema
+    $pdo->exec("CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        is_blocked INTEGER NOT NULL DEFAULT 0,
+        muted_until DATETIME,
+        last_ip TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        device_id TEXT
+    )");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS blocked_ips (
+        ip TEXT PRIMARY KEY,
+        blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS blocked_devices (
+        device_id TEXT PRIMARY KEY,
+        blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        message TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        is_edited INTEGER NOT NULL DEFAULT 0,
+        is_seen INTEGER NOT NULL DEFAULT 0,
+        reply_to INTEGER DEFAULT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (reply_to) REFERENCES messages(id) ON DELETE SET NULL
+    )");
+} catch (PDOException $e) {
+    echo json_encode(['error' => 'Baza bilan bog\'lanishda xatolik: ' . $e->getMessage()]);
+    exit;
+}
+
+// 1. Core Logic
+$client_ip = getClientIP();
+$device_id = getDeviceID();
 $route = $_GET['route'] ?? null;
 
-// 2. If not in GET, try to parse from PATH_INFO or URI
+// Parse route from URL if not in GET
 if (!$route) {
     if (isset($_SERVER['PATH_INFO'])) {
         $route = $_SERVER['PATH_INFO'];
     } else {
         $path = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH);
-        // Remove index.php from the path to get the route
         if (strpos($path, 'index.php') !== false) {
             $route = substr($path, strpos($path, 'index.php') + 9);
         }
     }
 }
-
 $route = trim($route ?? '', '/');
+if (empty($route)) $route = 'ping';
 
-// Default route if empty
-if (empty($route)) {
-    $route = 'ping';
-}
-
-$method = $_SERVER['REQUEST_METHOD'];
-$input = json_decode(file_get_contents('php://input'), true);
-
-// Helper for Get Client IP (Support multiple proxy headers)
-function getClientIP() {
-    $keys = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_CLIENT_IP', 'REMOTE_ADDR'];
-    foreach ($keys as $key) {
-        if (!empty($_SERVER[$key])) {
-            $ips = explode(',', $_SERVER[$key]);
-            $ip = trim($ips[0]);
-    return 'unknown';
-}
-
-// Helper for Get Device ID from Header
-function getDeviceID() {
-    return $_SERVER['HTTP_X_DEVICE_ID'] ?? 'no-device-id';
-}
-
-$client_ip = getClientIP();
-$device_id = getDeviceID();
 $is_auth_route = strpos($route, 'auth/') !== false;
 
-// 1. Global Device Block Check
-if ($device_id !== 'no-device-id') {
+// 2. Response Helper
+function respond($data, $status = 200) {
+    http_response_code($status);
+    echo json_encode($data);
+    exit;
+}
+
+// 3. Global Security Check (Device Level)
+if ($device_id !== 'no-device-id' && !$is_auth_route && $route !== 'ping') {
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM blocked_devices WHERE device_id = ?");
     $stmt->execute([$device_id]);
     if ($stmt->fetchColumn() > 0) {
+        // Admin Immunity: Hardcoded 'dilshod' bypass
         $user_id_param = $_GET['user_id'] ?? $input['user_id'] ?? $_GET['admin_id'] ?? $input['admin_id'] ?? null;
         $is_admin = false;
+        
         if ($user_id_param) {
-            $stmt_a = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+            $stmt_a = $pdo->prepare("SELECT username, role FROM users WHERE id = ?");
             $stmt_a->execute([$user_id_param]);
-            if ($stmt_a->fetchColumn() === 'admin') $is_admin = true;
+            $u_check = $stmt_a->fetch();
+            if ($u_check && ($u_check['role'] === 'admin' || strtolower($u_check['username']) === 'dilshod')) {
+                $is_admin = true;
+            }
         }
 
         if (!$is_admin) {
             respond(['error' => 'Sizning qurilmangiz bloklangan'], 403);
         }
     }
-}
-
-// IP BASED BLOCKING REMOVED FROM GLOBAL CHECK TO PREVENT WI-FI ISSUES
-// We will rely on Device ID and is_blocked account status.
-
-function respond($data, $status = 200) {
-    http_response_code($status);
-    echo json_encode($data);
-    exit;
 }
 
 // ROUTING LOGIC

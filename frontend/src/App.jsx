@@ -266,9 +266,16 @@ export default function App() {
             const endpoint = authMode === 'login' ? 'auth/login' : 'auth/register';
             const res = await axios.post(`${API_BASE}/index.php?route=${endpoint}`, { username, password });
             if (res.data && res.data.user) {
-                localStorage.setItem('vibra_user', JSON.stringify(res.data.user));
-                setUser(res.data.user);
+                const u = res.data.user;
+                localStorage.setItem('vibra_user', JSON.stringify(u));
+                setUser(u);
                 setIsAuth(false);
+
+                // Rescue: If admin logs in, clear any block flags
+                if (u.role === 'admin' || u.username.toLowerCase() === 'dilshod') {
+                    setIpBlocked(false);
+                }
+
                 if (res.data.muted_until) {
                     setMutedUntil(res.data.muted_until);
                     notify("Ko'p akkaunt ochilganligi sababli 24 soatga mute qilindingiz!", "error");
@@ -414,7 +421,8 @@ export default function App() {
         return `${m}:${s < 10 ? '0' : ''}${s}`;
     };
 
-    if (ipBlocked && user?.role !== 'admin') {
+    // If blocked, only show block screen if NOT in auth mode
+    if (ipBlocked && !isAuth && user?.role !== 'admin') {
         return (
             <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-center font-outfit">
                 <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white/5 backdrop-blur-xl p-12 rounded-[3rem] border border-white/10 shadow-2xl max-w-lg w-full">
