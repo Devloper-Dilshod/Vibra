@@ -8,7 +8,8 @@ date_default_timezone_set('Asia/Tashkent');
 $allowed_origins = [
     "http://localhost:5173",
     "https://vibra-uz.vercel.app",
-    "https://vibra.uz"
+    "https://vibra.uz",
+    "http://vibra.uz"
 ];
 
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
@@ -28,28 +29,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 require_once __DIR__ . '/db.php';
 
-$request_uri = $_SERVER['REQUEST_URI'] ?? '';
-$path = parse_url($request_uri, PHP_URL_PATH);
-// Base path adjustment if running in a subdirectory
-$base_path = '/VIbra/backend/index.php';
-$route = str_replace($base_path, '', $path);
-$route = trim($route, '/');
+// 1. Try to get route from GET parameter (more robust for varied hosting)
+$route = $_GET['route'] ?? null;
 
-// For f0069.5fh.ru/vibra style hosting, we might need more flexible routing
-// If the above doesn't work perfectly, we'll use a simpler 'action' param if needed
-// but let's try clean routes first.
+// 2. If not in GET, try to parse from PATH_INFO or URI
+if (!$route) {
+    if (isset($_SERVER['PATH_INFO'])) {
+        $route = $_SERVER['PATH_INFO'];
+    } else {
+        $path = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH);
+        // Remove index.php from the path to get the route
+        if (strpos($path, 'index.php') !== false) {
+            $route = substr($path, strpos($path, 'index.php') + 9);
+        }
+    }
+}
+
+$route = trim($route ?? '', '/');
+
+// Default route if empty
+if (empty($route)) {
+    $route = 'ping';
+}
 
 $method = $_SERVER['REQUEST_METHOD'];
 $input = json_decode(file_get_contents('php://input'), true);
 
-// Global IP Check & Block
+// Global IP Check & Block (Skip for login and info routes to allow admin recovery)
 $client_ip = $_SERVER['REMOTE_ADDR'] ?? '';
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM blocked_ips WHERE ip = ?");
-$stmt->execute([$client_ip]);
-if ($stmt->fetchColumn() > 0) {
-    http_response_code(403);
-    echo json_encode(['error' => 'Siz  bloklangansiz']);
-    exit;
+$is_auth_route = strpos($route, 'auth/') !== false;
+
+if (!$is_auth_route && !empty($client_ip) && $client_ip !== '::1' && $client_ip !== '127.0.0.1') {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM blocked_ips WHERE ip = ?");
+    $stmt->execute([$client_ip]);
+    if ($stmt->fetchColumn() > 0) {
+        $user_id_param = $_GET['user_id'] ?? $input['user_id'] ?? null;
+        $is_admin = false;
+        if ($user_id_param) {
+            $stmt_a = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+            $stmt_a->execute([$user_id_param]);
+            if ($stmt_a->fetchColumn() === 'admin') $is_admin = true;
+        }
+        
+        if (!$is_admin) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Siz bloklangansiz']);
+            exit;
+        }
+    }
 }
 
 function respond($data, $status = 200) {
@@ -100,7 +127,8 @@ switch ($route) {
         $user = $stmt->fetch();
         
         if ($user && password_verify($password, $user['password'])) {
-            if ($user['is_blocked']) respond(['error' => 'Your account is blocked'], 403);
+            // Admins are immune to account blocking
+            if ($user['is_blocked'] && $user['role'] !== 'admin') respond(['error' => 'Your account is blocked'], 403);
             
             // Update last IP on login
             $stmt = $pdo->prepare("UPDATE users SET last_ip = ? WHERE id = ?");
@@ -153,7 +181,12 @@ switch ($route) {
             $stmt->execute([$curr_user_id]);
             $row = $stmt->fetch();
             if ($row) {
-                $is_blocked = (int)$row['is_blocked'];
+                // Return 0 for is_blocked if user is admin
+                $stmt_role = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+                $stmt_role->execute([$curr_user_id]);
+                $user_role = $stmt_role->fetchColumn();
+                
+                $is_blocked = ($user_role === 'admin') ? 0 : (int)$row['is_blocked'];
                 $muted_until = $row['muted_until'];
             }
         }
@@ -260,17 +293,23 @@ switch ($route) {
         $stmt->execute([$admin_id]);
         if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
 
-        // Get user IP before blocking
-        $stmt = $pdo->prepare("SELECT last_ip FROM users WHERE id = ?");
+        // Admin can't be blocked
+        $stmt = $pdo->prepare("SELECT role, last_ip FROM users WHERE id = ?");
         $stmt->execute([$target_user_id]);
-        $ip_to_block = $stmt->fetchColumn();
+        $target_user = $stmt->fetch();
+        
+        if (!$target_user) respond(['error' => 'Foydalanuvchi topilmadi'], 404);
+        if ($target_user['role'] === 'admin') respond(['error' => 'Adminni bloklay olmaysiz!'], 400);
+        if ((int)$target_user_id === (int)$admin_id) respond(['error' => 'O\'zingizni bloklay olmaysiz!'], 400);
+
+        $ip_to_block = $target_user['last_ip'];
 
         // Block User
         $stmt = $pdo->prepare("UPDATE users SET is_blocked = 1 WHERE id = ?");
         $stmt->execute([$target_user_id]);
 
-        // Add IP to blocked list
-        if ($ip_to_block) {
+        // Add IP to blocked list (Safety: don't block empty or local IPs)
+        if ($ip_to_block && !in_array($ip_to_block, ['', '::1', '127.0.0.1'])) {
             $stmt = $pdo->prepare("INSERT OR IGNORE INTO blocked_ips (ip) VALUES (?)");
             $stmt->execute([$ip_to_block]);
         }
@@ -293,6 +332,19 @@ switch ($route) {
         respond(['success' => true]);
         break;
 
+    case 'admin/reset_blocks':
+        if ($method !== 'POST') respond(['error' => 'Method not allowed'], 405);
+        $admin_id = $input['admin_id'] ?? null;
+        
+        $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+        $stmt->execute([$admin_id]);
+        if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
+        
+        $pdo->exec("DELETE FROM blocked_ips");
+        $pdo->exec("UPDATE users SET is_blocked = 0");
+        respond(['success' => true]);
+        break;
+
     case 'admin/users':
         if ($method !== 'GET') respond(['error' => 'Method not allowed'], 405);
         $admin_id = $_GET['admin_id'] ?? null;
@@ -303,7 +355,12 @@ switch ($route) {
         if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
 
         $stmt = $pdo->query("SELECT id, username, role, is_blocked FROM users");
-        respond($stmt->fetchAll());
+        $all_users = $stmt->fetchAll();
+        foreach ($all_users as &$u) {
+            if ($u['role'] === 'admin') $u['is_blocked'] = 0;
+            $u['is_blocked'] = (int)$u['is_blocked'];
+        }
+        respond($all_users);
         break;
 
     default:
