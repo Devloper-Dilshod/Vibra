@@ -140,7 +140,7 @@ export default function App() {
 
     const scrollRef = useRef(null);
     const messageRefs = useRef({});
-    const prevHeightRef = useRef(0);
+    const isAtBottomRef = useRef(true);
 
     const notify = (message, type = 'success') => {
         setToast({ message, type, visible: true });
@@ -156,20 +156,25 @@ export default function App() {
     }, [user, ipBlocked]);
 
     useEffect(() => {
-        if (scrollRef.current && !replyingTo) {
-            const el = scrollRef.current;
-            // Only auto-scroll if the user was already at the bottom before messages updated
-            const threshold = 100;
-            const wasAtBottom = prevHeightRef.current - el.scrollTop - el.clientHeight < threshold;
+        // Auto-scroll ONLY if already at bottom
+        if (scrollRef.current && isAtBottomRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+    }, [messages]);
 
-            if (wasAtBottom) {
-                el.scrollTop = el.scrollHeight;
+    // Track scroll position
+    useEffect(() => {
+        const handleScroll = () => {
+            if (scrollRef.current) {
+                const el = scrollRef.current;
+                const isBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+                isAtBottomRef.current = isBottom;
             }
-        }
-        if (scrollRef.current) {
-            prevHeightRef.current = scrollRef.current.scrollHeight;
-        }
-    }, [messages, replyingTo]);
+        };
+        const el = scrollRef.current;
+        if (el) el.addEventListener('scroll', handleScroll);
+        return () => el?.removeEventListener('scroll', handleScroll);
+    }, []);
 
     // Removal of scroll-to-top listeners as button is removed
 
@@ -488,7 +493,7 @@ export default function App() {
                 </div>
 
 
-                <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 md:px-16 py-12 space-y-10 scroll-smooth bg-slate-50/50">
+                <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 md:px-16 py-12 space-y-10 bg-slate-50/50">
                     {Array.isArray(messages) && messages.map((msg) => (
                         <motion.div ref={el => messageRefs.current[msg.id] = el} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={msg.id} className={`flex flex-col group ${msg.username === user.username ? 'items-end' : 'items-start'}`}>
                             <div className="flex items-center gap-2 mb-1.5 px-3">
