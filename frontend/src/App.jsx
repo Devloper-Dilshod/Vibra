@@ -3,7 +3,7 @@ import axios from 'axios';
 import {
     Send, LogOut, User as UserIcon, Shield, Trash2,
     Settings, Search, MessageSquare,
-    Users, Bell, Info, Edit, X, CheckCheck, Loader2, AlertCircle, Lock, CornerUpLeft, ArrowDown, ArrowUp
+    Users, Bell, Info, Edit, X, CheckCheck, Loader2, AlertCircle, Lock, CornerUpLeft, ArrowDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as THREE from 'three';
@@ -134,13 +134,13 @@ export default function App() {
     const [adminModal, setAdminModal] = useState(false);
     const [userList, setUserList] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [showScrollTop, setShowScrollTop] = useState(false);
 
     // Notification State
     const [toast, setToast] = useState({ message: '', type: 'success', visible: false });
 
     const scrollRef = useRef(null);
     const messageRefs = useRef({});
+    const prevHeightRef = useRef(0);
 
     const notify = (message, type = 'success') => {
         setToast({ message, type, visible: true });
@@ -158,35 +158,20 @@ export default function App() {
     useEffect(() => {
         if (scrollRef.current && !replyingTo) {
             const el = scrollRef.current;
-            // Scroll to bottom only if user is already near bottom (within 150px)
-            const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
-            if (isNearBottom) {
+            // Only auto-scroll if the user was already at the bottom before messages updated
+            const threshold = 100;
+            const wasAtBottom = prevHeightRef.current - el.scrollTop - el.clientHeight < threshold;
+
+            if (wasAtBottom) {
                 el.scrollTop = el.scrollHeight;
             }
         }
+        if (scrollRef.current) {
+            prevHeightRef.current = scrollRef.current.scrollHeight;
+        }
     }, [messages, replyingTo]);
 
-    // Scroll to top button visibility
-    useEffect(() => {
-        const handleScroll = () => {
-            if (scrollRef.current) {
-                setShowScrollTop(scrollRef.current.scrollTop > 500);
-            }
-        };
-        const scrollEl = scrollRef.current;
-        if (scrollEl) {
-            scrollEl.addEventListener('scroll', handleScroll);
-        }
-        return () => {
-            if (scrollEl) scrollEl.removeEventListener('scroll', handleScroll);
-        };
-    }, []);
-
-    const scrollToTop = () => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
-        }
-    };
+    // Removal of scroll-to-top listeners as button is removed
 
     // Admin Immunity: Always unblock if role is admin
     useEffect(() => {
@@ -502,19 +487,6 @@ export default function App() {
                     </div>
                 </div>
 
-                <AnimatePresence>
-                    {showScrollTop && (
-                        <motion.button
-                            initial={{ opacity: 0, scale: 0.5, y: 20 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.5, y: 20 }}
-                            onClick={scrollToTop}
-                            className="absolute bottom-52 right-8 md:right-12 p-6 bg-sky-500 text-white rounded-full shadow-[0_20px_60px_rgba(14,165,233,0.4)] z-[70] hover:bg-sky-400 active:scale-95 transition-all border-4 border-white group"
-                        >
-                            <ArrowUp className="w-8 h-8 group-hover:-translate-y-1 transition-transform" />
-                        </motion.button>
-                    )}
-                </AnimatePresence>
 
                 <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 md:px-16 py-12 space-y-10 scroll-smooth bg-slate-50/50">
                     {Array.isArray(messages) && messages.map((msg) => (
