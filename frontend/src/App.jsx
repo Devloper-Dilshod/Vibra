@@ -3,7 +3,7 @@ import axios from 'axios';
 import {
     Send, LogOut, User as UserIcon, Shield, Trash2,
     Settings, Search, MessageSquare,
-    Users, Bell, Info, Edit, X, CheckCheck, Loader2, AlertCircle, Lock, CornerUpLeft, ArrowDown
+    Users, Bell, Info, Edit, X, CheckCheck, Loader2, AlertCircle, Lock, CornerUpLeft, ArrowDown, ArrowUp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as THREE from 'three';
@@ -115,6 +115,7 @@ const Toast = ({ message, type, isVisible, onHide }) => (
 
 export default function App() {
     const [user, setUser] = useState(() => safeJSONParse(localStorage.getItem('vibra_user') || 'null'));
+    const [token, setToken] = useState(() => localStorage.getItem('vibra_token') || '');
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
     const [isAuth, setIsAuth] = useState(!user);
@@ -133,6 +134,7 @@ export default function App() {
     const [adminModal, setAdminModal] = useState(false);
     const [userList, setUserList] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [showScrollTop, setShowScrollTop] = useState(false);
 
     // Notification State
     const [toast, setToast] = useState({ message: '', type: 'success', visible: false });
@@ -158,6 +160,28 @@ export default function App() {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [messages, replyingTo]);
+
+    // Scroll to top button visibility
+    useEffect(() => {
+        const handleScroll = () => {
+            if (scrollRef.current) {
+                setShowScrollTop(scrollRef.current.scrollTop > 500);
+            }
+        };
+        const scrollEl = scrollRef.current;
+        if (scrollEl) {
+            scrollEl.addEventListener('scroll', handleScroll);
+        }
+        return () => {
+            if (scrollEl) scrollEl.removeEventListener('scroll', handleScroll);
+        };
+    }, []);
+
+    const scrollToTop = () => {
+        if (scrollRef.current) {
+            scrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+    };
 
     // Admin Immunity: Always unblock if role is admin
     useEffect(() => {
@@ -203,9 +227,11 @@ export default function App() {
     }, [mutedUntil]);
 
     const fetchMessages = async () => {
-        if (!user || !user.id || ipBlocked) return;
+        if (!user || !user.id || ipBlocked || !token) return;
         try {
-            const res = await axios.get(`${API_BASE}/index.php?route=chat/messages&user_id=${user.id}`);
+            const res = await axios.get(`${API_BASE}/index.php?route=chat/messages&user_id=${user.id}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
             const data = res.data;
             if (data && Array.isArray(data.messages)) {
                 setMessages(data.messages);
@@ -223,14 +249,17 @@ export default function App() {
             }
         } catch (err) {
             console.error('Fetch Error:', err);
+            if (err.response?.status === 401) logout();
             if (err.response?.status === 403 && user?.role !== 'admin') setIpBlocked(true);
         }
     };
 
     const fetchUsers = async () => {
-        if (!user || user.role !== 'admin') return;
+        if (!user || user.role !== 'admin' || !token) return;
         try {
-            const res = await axios.get(`${API_BASE}/index.php?route=admin/users&admin_id=${user.id}`);
+            const res = await axios.get(`${API_BASE}/index.php?route=admin/users`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
             if (Array.isArray(res.data)) setUserList(res.data);
         } catch (err) {
             console.error('Admin Fetch Error');
@@ -251,9 +280,11 @@ export default function App() {
         try {
             const endpoint = authMode === 'login' ? 'auth/login' : 'auth/register';
             const res = await axios.post(`${API_BASE}/index.php?route=${endpoint}`, { username, password });
-            if (res.data && res.data.user) {
+            if (res.data && res.data.user && res.data.token) {
                 localStorage.setItem('vibra_user', JSON.stringify(res.data.user));
+                localStorage.setItem('vibra_token', res.data.token);
                 setUser(res.data.user);
+                setToken(res.data.token);
                 setIsAuth(false);
                 if (res.data.muted_until) {
                     setMutedUntil(res.data.muted_until);
@@ -277,14 +308,18 @@ export default function App() {
 
     const sendMessage = async (e) => {
         e.preventDefault();
-        if (!input.trim() || !user || user.is_blocked || timeLeft > 0) return;
+        if (!input.trim() || !user || user.is_blocked || timeLeft > 0 || !token) return;
         try {
-            await axios.post(`${API_BASE}/index.php?route=chat/send`, { user_id: user.id, message: input, reply_to: replyingTo?.id });
+            await axios.post(`${API_BASE}/index.php?route=chat/send`,
+                { message: input, reply_to: replyingTo?.id },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
             setInput('');
             setReplyingTo(null);
             fetchMessages();
         } catch (err) {
-            if (err.response?.status === 403 && err.response?.data?.muted_until) {
+            if (err.response?.status === 401) logout();
+            else if (err.response?.status === 403 && err.response?.data?.muted_until) {
                 setMutedUntil(err.response.data.muted_until);
             } else if (err.response?.status === 403 && user?.role !== 'admin') {
                 setIpBlocked(true);
@@ -300,9 +335,12 @@ export default function App() {
     };
 
     const saveEdit = async () => {
-        if (!editInput.trim() || !user) return;
+        if (!editInput.trim() || !user || !token) return;
         try {
-            await axios.post(`${API_BASE}/index.php?route=chat/edit`, { id: editingMsg.id, user_id: user.id, message: editInput });
+            await axios.post(`${API_BASE}/index.php?route=chat/edit`,
+                { id: editingMsg.id, message: editInput },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
             setEditingMsg(null);
             fetchMessages();
             notify('Xabar tahrirlandi');
@@ -312,9 +350,12 @@ export default function App() {
     };
 
     const confirmDelete = async () => {
-        if (!user) return;
+        if (!user || !token) return;
         try {
-            await axios.post(`${API_BASE}/index.php?route=chat/delete`, { id: deleteModal.id, user_id: user.id });
+            await axios.post(`${API_BASE}/index.php?route=chat/delete`,
+                { id: deleteModal.id },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
             setDeleteModal({ open: false, id: null });
             fetchMessages();
             notify('Xabar o\'chirildi');
@@ -324,10 +365,13 @@ export default function App() {
     };
 
     const toggleBlock = async (targetId, isBlocked) => {
-        if (!user) return;
+        if (!user || !token) return;
         const endpoint = isBlocked ? 'unblock' : 'block';
         try {
-            await axios.post(`${API_BASE}/index.php?route=admin/${endpoint}`, { user_id: targetId, admin_id: user.id });
+            await axios.post(`${API_BASE}/index.php?route=admin/${endpoint}`,
+                { user_id: targetId },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
             fetchUsers();
             notify(isBlocked ? 'Foydalanuvchi blokdan chiqarildi' : 'Foydalanuvchi bloklandi');
         } catch (err) {
@@ -336,10 +380,13 @@ export default function App() {
     };
 
     const resetBlocks = async () => {
-        if (!user || user.role !== 'admin') return;
+        if (!user || user.role !== 'admin' || !token) return;
         if (!confirm("Barcha bloklarni (IP va Account) BUTUNLAY o'chirib tashlaysizmi?")) return;
         try {
-            await axios.post(`${API_BASE}/index.php?route=admin/reset_blocks`, { admin_id: user.id });
+            await axios.post(`${API_BASE}/index.php?route=admin/reset_blocks`,
+                {},
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
             notify("Barcha bloklar tozalandi!");
             fetchUsers();
         } catch (err) {
@@ -358,7 +405,9 @@ export default function App() {
 
     const logout = () => {
         localStorage.removeItem('vibra_user');
+        localStorage.removeItem('vibra_token');
         setUser(null);
+        setToken('');
         setIsAuth(true);
         setMessages([]);
         notify('Tizimdan chiqdingiz');
@@ -441,6 +490,20 @@ export default function App() {
                         </div>
                     </div>
                 </div>
+
+                <AnimatePresence>
+                    {showScrollTop && (
+                        <motion.button
+                            initial={{ opacity: 0, scale: 0.5, y: 20 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.5, y: 20 }}
+                            onClick={scrollToTop}
+                            className="absolute bottom-40 right-10 p-4 bg-sky-500 text-white rounded-2xl shadow-2xl z-40 hover:bg-sky-400 active:scale-90 transition-all"
+                        >
+                            <ArrowUp className="w-6 h-6" />
+                        </motion.button>
+                    )}
+                </AnimatePresence>
 
                 <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 md:px-16 py-12 space-y-10 scroll-smooth bg-slate-50/50">
                     {Array.isArray(messages) && messages.map((msg) => (
@@ -556,8 +619,6 @@ export default function App() {
             </Modal>
 
             <Toast isVisible={toast.visible} message={toast.message} type={toast.type} onHide={() => setToast(p => ({ ...p, visible: false }))} />
-
-            <style>{`.custom-scrollbar::-webkit-scrollbar { width: 5px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 20px; }`}</style>
         </div>
     );
 }

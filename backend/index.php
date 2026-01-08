@@ -27,6 +27,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit(0);
 }
 
+// SECURITY: Secret key for token signing
+define('JWT_SECRET', 'vibra_top_secret_key_2026_@#!');
+
+function createToken($user_id, $username, $role) {
+    $header = json_encode(['typ' => 'JWT', 'alg' => 'HS256']);
+    $payload = json_encode([
+        'user_id' => (int)$user_id,
+        'username' => $username,
+        'role' => $role,
+        'iat' => time(),
+        'exp' => time() + (86400 * 30) // 30 days
+    ]);
+    
+    $base64UrlHeader = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($header));
+    $base64UrlPayload = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($payload));
+    
+    $signature = hash_hmac('sha256', $base64UrlHeader . "." . $base64UrlPayload, JWT_SECRET, true);
+    $base64UrlSignature = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($signature));
+    
+    return $base64UrlHeader . "." . $base64UrlPayload . "." . $base64UrlSignature;
+}
+
+function verifyToken($token) {
+    $parts = explode('.', $token);
+    if (count($parts) !== 3) return null;
+    
+    list($header, $payload, $signature) = $parts;
+    
+    $validSignature = hash_hmac('sha256', $header . "." . $payload, JWT_SECRET, true);
+    $validSignatureEncoded = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($validSignature));
+    
+    if ($signature !== $validSignatureEncoded) return null;
+    
+    $data = json_decode(base64_decode(str_replace(['-', '_'], ['+', '/'], $payload)), true);
+    if (!$data || (isset($data['exp']) && $data['exp'] < time())) return null;
+    
+    return $data;
+}
+
+function getAuthUser() {
+    $headers = getallheaders();
+    $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? '';
+    if (preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
+        return verifyToken($matches[1]);
+    }
+    return null;
+}
+
 require_once __DIR__ . '/db.php';
 
 // 1. Try to get route from GET parameter (more robust for varied hosting)
@@ -155,7 +203,9 @@ switch ($route) {
             $user['is_verified'] = (strtolower($user['username']) === 'dilshod') ? 1 : 0;
             $user['is_blocked'] = (int)$user['is_blocked'];
 
-            respond(['success' => true, 'user' => $user, 'muted_until' => $mute_until]);
+            $token = createToken($user['id'], $user['username'], $user['role']);
+
+            respond(['success' => true, 'user' => $user, 'token' => $token, 'muted_until' => $mute_until]);
         } catch (PDOException $e) {
             respond(['error' => 'Bu foydalanuvchi nomi band'], 400);
         }
@@ -196,7 +246,9 @@ switch ($route) {
             // Add verified status
             $user['is_verified'] = (strtolower($user['username']) === 'dilshod') ? 1 : 0;
             
-            respond(['user' => $user]);
+            $token = createToken($user['id'], $user['username'], $user['role']);
+            
+            respond(['user' => $user, 'token' => $token]);
         } else {
             // Failure
             $stmt = $pdo->prepare("INSERT INTO login_attempts (ip, username, is_success) VALUES (?, ?, 0)");
@@ -256,10 +308,11 @@ switch ($route) {
 
     case 'chat/send':
         if ($method !== 'POST') respond(['error' => 'Method not allowed'], 405);
-        $user_id = $input['user_id'] ?? null;
+        $auth = getAuthUser();
+        if (!$auth) respond(['error' => 'Unauthorized'], 401);
+        
+        $user_id = $auth['user_id'];
         $message = $input['message'] ?? '';
-        $reply_to = $input['reply_to'] ?? null;
-        if (!$user_id || !$message) respond(['error' => 'Missing fields'], 400);
         
         // Fetch user info
         $stmt = $pdo->prepare("SELECT role, is_blocked, muted_until FROM users WHERE id = ?");
@@ -305,10 +358,12 @@ switch ($route) {
 
     case 'chat/edit':
         if ($method !== 'POST') respond(['error' => 'Method not allowed'], 405);
+        $auth = getAuthUser();
+        if (!$auth) respond(['error' => 'Unauthorized'], 401);
+        
         $id = $input['id'] ?? null;
-        $user_id = $input['user_id'] ?? null;
+        $user_id = $auth['user_id'];
         $message = $input['message'] ?? '';
-        if (!$id || !$user_id || !$message) respond(['error' => 'Missing fields'], 400);
 
         $stmt = $pdo->prepare("UPDATE messages SET message = ?, is_edited = 1 WHERE id = ? AND user_id = ?");
         $stmt->execute([$message, $id, $user_id]);
@@ -317,10 +372,13 @@ switch ($route) {
 
     case 'chat/delete':
         if ($method !== 'POST') respond(['error' => 'Method not allowed'], 405);
+        $auth = getAuthUser();
+        if (!$auth) respond(['error' => 'Unauthorized'], 401);
+
         $id = $input['id'] ?? null;
-        $user_id = $input['user_id'] ?? null; // ID of the person trying to delete
+        $user_id = $auth['user_id']; // ID from token
         
-        if (!$id || !$user_id) respond(['error' => 'Missing fields'], 400);
+        if (!$id) respond(['error' => 'Missing fields'], 400);
 
         // Fetch the message to check ownership
         $stmt = $pdo->prepare("SELECT user_id FROM messages WHERE id = ?");
@@ -345,13 +403,11 @@ switch ($route) {
 
     case 'admin/block':
         if ($method !== 'POST') respond(['error' => 'Method not allowed'], 405);
-        $target_user_id = $input['user_id'] ?? null;
-        $admin_id = $input['admin_id'] ?? null;
+        $auth = getAuthUser();
+        if (!$auth || $auth['role'] !== 'admin') respond(['error' => 'Unauthorized'], 403);
 
-        // Verify admin
-        $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
-        $stmt->execute([$admin_id]);
-        if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
+        $target_user_id = $input['user_id'] ?? null;
+        $admin_id = $auth['user_id'];
 
         // Admin can't be blocked
         $stmt = $pdo->prepare("SELECT role, last_ip FROM users WHERE id = ?");
@@ -379,13 +435,10 @@ switch ($route) {
 
     case 'admin/unblock':
         if ($method !== 'POST') respond(['error' => 'Method not allowed'], 405);
-        $target_user_id = $input['user_id'] ?? null;
-        $admin_id = $input['admin_id'] ?? null;
+        $auth = getAuthUser();
+        if (!$auth || $auth['role'] !== 'admin') respond(['error' => 'Unauthorized'], 403);
 
-        // Verify admin
-        $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
-        $stmt->execute([$admin_id]);
-        if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
+        $target_user_id = $input['user_id'] ?? null;
 
         // Get user IP before unblocking
         $stmt = $pdo->prepare("SELECT last_ip FROM users WHERE id = ?");
@@ -407,11 +460,8 @@ switch ($route) {
 
     case 'admin/reset_blocks':
         if ($method !== 'POST') respond(['error' => 'Method not allowed'], 405);
-        $admin_id = $input['admin_id'] ?? null;
-        
-        $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
-        $stmt->execute([$admin_id]);
-        if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
+        $auth = getAuthUser();
+        if (!$auth || $auth['role'] !== 'admin') respond(['error' => 'Unauthorized'], 403);
         
         $pdo->exec("DELETE FROM blocked_ips");
         $pdo->exec("UPDATE users SET is_blocked = 0");
@@ -420,12 +470,8 @@ switch ($route) {
 
     case 'admin/users':
         if ($method !== 'GET') respond(['error' => 'Method not allowed'], 405);
-        $admin_id = $_GET['admin_id'] ?? null;
-
-        // Verify admin
-        $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
-        $stmt->execute([$admin_id]);
-        if ($stmt->fetchColumn() !== 'admin') respond(['error' => 'Unauthorized'], 403);
+        $auth = getAuthUser();
+        if (!$auth || $auth['role'] !== 'admin') respond(['error' => 'Unauthorized'], 403);
 
         $stmt = $pdo->query("SELECT id, username, role, is_blocked FROM users");
         $all_users = $stmt->fetchAll();
