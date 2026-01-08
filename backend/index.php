@@ -55,19 +55,38 @@ if (empty($route)) {
 $method = $_SERVER['REQUEST_METHOD'];
 $input = json_decode(file_get_contents('php://input'), true);
 
-// Helper for Get Client IP (Support proxies)
+// Helper for Get Client IP (Comprehensive detection for various hosting/proxies)
 function getClientIP() {
-    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-        return trim($ips[0]);
+    $headers = [
+        'HTTP_CF_CONNECTING_IP', // Cloudflare
+        'HTTP_X_FORWARDED_FOR',  // Standard proxy
+        'HTTP_CLIENT_IP',
+        'HTTP_X_REAL_IP',
+        'HTTP_TRUE_CLIENT_IP',
+        'REMOTE_ADDR'
+    ];
+
+    foreach ($headers as $header) {
+        if (!empty($_SERVER[$header])) {
+            $ips = explode(',', $_SERVER[$header]);
+            foreach ($ips as $ip) {
+                $ip = trim($ip);
+                // Skip local/invalid if possible, but for simplicity:
+                if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                    return $ip;
+                }
+            }
+        }
     }
-    return $_SERVER['REMOTE_ADDR'] ?? '';
+    return '0.0.0.0'; 
 }
 
 $client_ip = getClientIP();
 $is_auth_route = strpos($route, 'auth/') !== false;
 
-if (!$is_auth_route && !empty($client_ip) && $client_ip !== '::1' && $client_ip !== '127.0.0.1') {
+/* 
+// [DISABLED TEMPORARILY] Global IP Check & Block to prevent mass lockout
+if (!$is_auth_route && !empty($client_ip) && $client_ip !== '::1' && $client_ip !== '127.0.0.1' && $client_ip !== '0.0.0.0') {
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM blocked_ips WHERE ip = ?");
     $stmt->execute([$client_ip]);
     if ($stmt->fetchColumn() > 0) {
@@ -86,6 +105,7 @@ if (!$is_auth_route && !empty($client_ip) && $client_ip !== '::1' && $client_ip 
         }
     }
 }
+*/
 
 function respond($data, $status = 200) {
     http_response_code($status);
