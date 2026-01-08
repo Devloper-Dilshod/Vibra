@@ -8,7 +8,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import * as THREE from 'three';
 
-const API_BASE = 'https://f0069.5fh.ru/vibra/backend/index.php';
+const API_BASE = 'https://f0069.5fh.ru/vibra/backend';
 
 // --- Helper for Safe JSON Parsing ---
 const safeJSONParse = (str) => {
@@ -156,7 +156,7 @@ export default function App() {
     const fetchMessages = async () => {
         if (!user || !user.id || ipBlocked) return;
         try {
-            const res = await axios.get(`${API_BASE}/chat/messages?user_id=${user.id}`);
+            const res = await axios.get(`${API_BASE}/index.php?route=chat/messages&user_id=${user.id}`);
             const data = res.data;
             if (data && Array.isArray(data.messages)) {
                 setMessages(data.messages);
@@ -179,7 +179,7 @@ export default function App() {
     const fetchUsers = async () => {
         if (!user || user.role !== 'admin') return;
         try {
-            const res = await axios.get(`${API_BASE}/admin/users?admin_id=${user.id}`);
+            const res = await axios.get(`${API_BASE}/index.php?route=admin/users&admin_id=${user.id}`);
             if (Array.isArray(res.data)) setUserList(res.data);
         } catch (err) {
             console.error('Admin Fetch Error');
@@ -199,7 +199,7 @@ export default function App() {
         setLoading(true);
         try {
             const endpoint = authMode === 'login' ? 'auth/login' : 'auth/register';
-            const res = await axios.post(`${API_BASE}/${endpoint}`, { username, password });
+            const res = await axios.post(`${API_BASE}/index.php?route=${endpoint}`, { username, password });
             if (res.data && res.data.user) {
                 localStorage.setItem('vibra_user', JSON.stringify(res.data.user));
                 setUser(res.data.user);
@@ -222,7 +222,7 @@ export default function App() {
         e.preventDefault();
         if (!input.trim() || !user || user.is_blocked || timeLeft > 0) return;
         try {
-            await axios.post(`${API_BASE}/chat/send`, { user_id: user.id, message: input, reply_to: replyingTo?.id });
+            await axios.post(`${API_BASE}/index.php?route=chat/send`, { user_id: user.id, message: input, reply_to: replyingTo?.id });
             setInput('');
             setReplyingTo(null);
             fetchMessages();
@@ -245,7 +245,7 @@ export default function App() {
     const saveEdit = async () => {
         if (!editInput.trim() || !user) return;
         try {
-            await axios.post(`${API_BASE}/chat/edit`, { id: editingMsg.id, user_id: user.id, message: editInput });
+            await axios.post(`${API_BASE}/index.php?route=chat/edit`, { id: editingMsg.id, user_id: user.id, message: editInput });
             setEditingMsg(null);
             fetchMessages();
         } catch (err) {
@@ -256,7 +256,7 @@ export default function App() {
     const confirmDelete = async () => {
         if (!user) return;
         try {
-            await axios.post(`${API_BASE}/chat/delete`, { id: deleteModal.id, user_id: user.id });
+            await axios.post(`${API_BASE}/index.php?route=chat/delete`, { id: deleteModal.id, user_id: user.id });
             setDeleteModal({ open: false, id: null });
             fetchMessages();
         } catch (err) {
@@ -268,7 +268,7 @@ export default function App() {
         if (!user) return;
         const endpoint = isBlocked ? 'unblock' : 'block';
         try {
-            await axios.post(`${API_BASE}/admin/${endpoint}`, { user_id: targetId, admin_id: user.id });
+            await axios.post(`${API_BASE}/index.php?route=admin/${endpoint}`, { user_id: targetId, admin_id: user.id });
             fetchUsers();
         } catch (err) {
             alert('Operatsiyada xatolik');
